@@ -1,0 +1,40 @@
+import { describe, expect, it } from "vitest";
+import { containerId, formatBytes, publishedPorts, summarizeError } from "./format";
+
+describe("format helpers", () => {
+  it("formats bytes with practical units", () => {
+    expect(formatBytes(0)).toBe("0 B");
+    expect(formatBytes(1_024)).toBe("1.0 KB");
+    expect(formatBytes(1_048_576)).toBe("1.0 MB");
+  });
+
+  it("reads container ids from top-level or configuration", () => {
+    expect(containerId({ id: "top" })).toBe("top");
+    expect(containerId({ configuration: { id: "config" } })).toBe("config");
+  });
+
+  it("summarizes port mappings", () => {
+    expect(
+      publishedPorts([
+        {
+          hostAddress: "127.0.0.1",
+          hostPort: 8080,
+          containerPort: 80,
+          proto: "tcp",
+        },
+      ]),
+    ).toBe("127.0.0.1:8080 -> 80/tcp");
+  });
+
+  it("prefers stderr in command errors", () => {
+    expect(
+      summarizeError({
+        kind: "command_failed",
+        message: "failed",
+        command: "container list",
+        exitCode: 1,
+        stderr: "service unavailable",
+      }),
+    ).toContain("service unavailable");
+  });
+});
