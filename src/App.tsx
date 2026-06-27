@@ -25,6 +25,7 @@ import {
   getSnapshot,
   inspectContainer,
   isTauriRuntime,
+  requestStopApproval,
   startContainer,
   stopContainer,
 } from "./lib/api";
@@ -41,6 +42,7 @@ import {
   memoryPercent,
   panelData,
   publishedPorts,
+  redactSensitive,
   statusTone,
   summarizeError,
 } from "./lib/format";
@@ -51,6 +53,8 @@ import type {
   ImageRecord,
   Snapshot,
   StatsRecord,
+  StopApprovalChallenge,
+  StopApprovalInput,
 } from "./lib/types";
 import "./App.css";
 
@@ -75,6 +79,10 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [operatingId, setOperatingId] = useState<string | null>(null);
+  const [pendingStop, setPendingStop] = useState<ContainerRecord | null>(null);
+  const [stopChallenge, setStopChallenge] = useState<StopApprovalChallenge | null>(null);
+  const [stopAcknowledgement, setStopAcknowledgement] = useState("");
+  const [stopReason, setStopReason] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const loadActivity = useCallback(async () => {
@@ -96,7 +104,7 @@ function App() {
       });
       await loadActivity();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(redactSensitive(err instanceof Error ? err.message : String(err)));
     } finally {
       setLoading(false);
     }
@@ -111,10 +119,10 @@ function App() {
           getContainerLogs(id, useBootLogs, lines),
         ]);
         setInspectJson(inspectResult);
-        setLogs(logResult.text);
+        setLogs(redactSensitive(logResult.text));
       } catch (err) {
         const failure = err as Partial<CommandFailure>;
-        setError(failure.message ?? String(err));
+        setError(redactSensitive(failure.stderr || failure.message || String(err)));
       } finally {
         setDetailLoading(false);
       }
@@ -158,32 +166,72 @@ function App() {
 
   const runningCount = containers.filter(isRunning).length;
   const systemStatus = snapshot?.systemStatus.data?.status ?? "unknown";
+  const pendingStopId = pendingStop ? containerId(pendingStop) : "";
+  const requiredStopPhrase = stopChallenge?.requiredPhrase ?? (pendingStopId ? `STOP ${pendingStopId}` : "");
+  const stopReady = Boolean(
+    stopChallenge &&
+      stopAcknowledgement.trim() === stopChallenge.requiredPhrase &&
+      stopReason.trim().length >= 4,
+  );
 
-  async function runContainerAction(container: ContainerRecord, action: "start" | "stop") {
-    const id = containerId(container);
-    const protectedTarget = isProtectedContainer(container);
-    if (action === "stop") {
-      const warning = protectedTarget
-        ? `${id} is managed by apple/container. Stop it anyway?`
-        : `Stop ${id}?`;
-      if (!window.confirm(warning)) return;
+  function resetStopDialog() {
+    setPendingStop(null);
+    setStopChallenge(null);
+    setStopAcknowledgement("");
+    setStopReason("");
+  }
+
+  async function runContainerAction(
+    container: ContainerRecord,
+    action: "start" | "stop",
+    approval?: StopApprovalInput,
+  ) {
+    if (action === "stop" && !approval) {
+      setError("Stop requires a fresh approval token.");
+      return;
     }
+    const id = containerId(container);
     setOperatingId(id);
     setError(null);
     try {
       if (action === "start") {
         await startContainer(id);
-      } else {
-        await stopContainer(id);
+      } else if (approval) {
+        await stopContainer(id, approval);
       }
       await loadSnapshot();
       await loadActivity();
     } catch (err) {
       const failure = err as Partial<CommandFailure>;
-      setError(failure.stderr || failure.message || String(err));
+      setError(redactSensitive(failure.stderr || failure.message || String(err)));
     } finally {
       setOperatingId(null);
+      if (action === "stop") {
+        resetStopDialog();
+      }
     }
+  }
+
+  async function requestContainerAction(container: ContainerRecord, action: "start" | "stop") {
+    if (action === "stop") {
+      const id = containerId(container);
+      setOperatingId(id);
+      setError(null);
+      try {
+        const challenge = await requestStopApproval(id);
+        setPendingStop(container);
+        setStopChallenge(challenge);
+        setStopAcknowledgement("");
+        setStopReason("");
+      } catch (err) {
+        const failure = err as Partial<CommandFailure>;
+        setError(redactSensitive(failure.stderr || failure.message || String(err)));
+      } finally {
+        setOperatingId(null);
+      }
+      return;
+    }
+    void runContainerAction(container, action);
   }
 
   return (
@@ -273,7 +321,7 @@ function App() {
                 statsById={statsById}
                 selectedId={selectedContainer ? containerId(selectedContainer) : null}
                 onSelect={setSelectedId}
-                onAction={runContainerAction}
+                onAction={requestContainerAction}
                 operatingId={operatingId}
                 detail={
                   selectedContainer ? (
@@ -306,6 +354,68 @@ function App() {
           </>
         )}
       </main>
+
+      {pendingStop && (
+        <div className="modal-backdrop" role="presentation">
+          <div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="stop-title">
+            <CircleAlert size={22} aria-hidden="true" />
+            <div>
+              <h2 id="stop-title">Stop container</h2>
+              <p>
+                {isProtectedContainer(pendingStop)
+                  ? `${containerId(pendingStop)} is managed by apple/container.`
+                  : `${containerId(pendingStop)} will receive a stop request.`}
+              </p>
+              <div className="approval-fields">
+                <label>
+                  Required phrase
+                  <code>{requiredStopPhrase}</code>
+                </label>
+                <label>
+                  Confirmation
+                  <input
+                    autoFocus
+                    value={stopAcknowledgement}
+                    onChange={(event) => setStopAcknowledgement(event.currentTarget.value)}
+                    placeholder={requiredStopPhrase}
+                  />
+                </label>
+                <label>
+                  Reason
+                  <input
+                    maxLength={180}
+                    value={stopReason}
+                    onChange={(event) => setStopReason(event.currentTarget.value)}
+                    placeholder="Why this container should be stopped"
+                  />
+                </label>
+                {stopChallenge && <small>Approval expires at {formatDateTime(stopChallenge.expiresAtMs)}.</small>}
+              </div>
+              <div className="dialog-actions">
+                <button type="button" className="secondary-button" onClick={resetStopDialog}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="danger-button"
+                  disabled={!stopReady || operatingId === pendingStopId}
+                  onClick={() => {
+                    if (!stopChallenge) return;
+                    void runContainerAction(pendingStop, "stop", {
+                      approvalId: stopChallenge.approvalId,
+                      acknowledgement: stopAcknowledgement,
+                      reason: stopReason,
+                    });
+                  }}
+                >
+                  {operatingId === pendingStopId ? <Loader2 className="spin" size={14} /> : <Pause size={14} />}
+                  Stop
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -376,7 +486,7 @@ function ContainersView({
   statsById: Map<string, StatsRecord>;
   selectedId: string | null;
   onSelect: (id: string) => void;
-  onAction: (container: ContainerRecord, action: "start" | "stop") => Promise<void>;
+  onAction: (container: ContainerRecord, action: "start" | "stop") => void;
   operatingId: string | null;
   detail: ReactNode;
 }) {
@@ -425,21 +535,27 @@ function ContainersView({
                     </td>
                     <td>
                       <button
-                        className="icon-button"
+                        className="row-action"
                         type="button"
                         title={isRunning(container) ? "Stop" : "Start"}
                         disabled={operatingId === id}
                         onClick={(event) => {
                           event.stopPropagation();
-                          void onAction(container, isRunning(container) ? "stop" : "start");
+                          onAction(container, isRunning(container) ? "stop" : "start");
                         }}
                       >
                         {operatingId === id ? (
                           <Loader2 className="spin" size={16} />
                         ) : isRunning(container) ? (
-                          <Pause size={16} />
+                          <>
+                            <Pause size={14} />
+                            <span>Stop</span>
+                          </>
                         ) : (
-                          <Play size={16} />
+                          <>
+                            <Play size={14} />
+                            <span>Start</span>
+                          </>
                         )}
                       </button>
                     </td>
@@ -479,6 +595,10 @@ function ContainerDetail({
   onReload: () => void;
 }) {
   const id = containerId(container);
+  const inspectText = useMemo(
+    () => redactSensitive(JSON.stringify(inspectJson ?? {}, null, 2)),
+    [inspectJson],
+  );
   return (
     <section className="panel detail-panel">
       <div className="panel-header">
@@ -531,7 +651,7 @@ function ContainerDetail({
 
       <section className="subsection">
         <h3>Inspect JSON</h3>
-        <pre className="json-view">{JSON.stringify(inspectJson ?? {}, null, 2)}</pre>
+        <pre className="json-view">{inspectText}</pre>
       </section>
     </section>
   );
@@ -612,6 +732,7 @@ function ActivityView({ activity }: { activity: ActivityRecord[] }) {
               <th>Action</th>
               <th>Result</th>
               <th>Duration</th>
+              <th>Approval</th>
               <th>Command</th>
             </tr>
           </thead>
@@ -624,6 +745,9 @@ function ActivityView({ activity }: { activity: ActivityRecord[] }) {
                   <StatusPill label={record.success ? "ok" : "failed"} tone={record.success ? "good" : "bad"} />
                 </td>
                 <td>{record.durationMs} ms</td>
+                <td className="truncate" title={record.approvalReason ?? ""}>
+                  {record.approvalId ? record.requestedBy ?? "approved" : "-"}
+                </td>
                 <td className="truncate">{record.command}</td>
               </tr>
             ))}

@@ -32,6 +32,9 @@ export type ActivityRecord = {
   success: boolean;
   exitCode: number | null;
   stderr: string;
+  requestedBy?: string;
+  approvalId?: string;
+  approvalReason?: string;
 };
 
 export type TextResult = {
@@ -45,6 +48,19 @@ export type OperationResult = {
   stderr: string;
   command: string;
   durationMs: number;
+};
+
+export type StopApprovalChallenge = {
+  approvalId: string;
+  containerId: string;
+  requiredPhrase: string;
+  expiresAtMs: number;
+};
+
+export type StopApprovalInput = {
+  approvalId: string;
+  acknowledgement: string;
+  reason: string;
 };
 
 export type SystemStatus = {

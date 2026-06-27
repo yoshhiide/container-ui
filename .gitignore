@@ -4,5 +4,9 @@
 /.codex/
 /AGENTS.md
 /CLAUDE.md
+/.env
+/.env.*
 /dist/
+/logs/*.png
+/mise.local.toml
 /node_modules/

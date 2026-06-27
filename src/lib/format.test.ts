@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { containerId, formatBytes, publishedPorts, summarizeError } from "./format";
+import { containerId, formatBytes, publishedPorts, redactSensitive, summarizeError } from "./format";
 
 describe("format helpers", () => {
   it("formats bytes with practical units", () => {
@@ -36,5 +36,16 @@ describe("format helpers", () => {
         stderr: "service unavailable",
       }),
     ).toContain("service unavailable");
+  });
+
+  it("redacts sensitive lines in visible text", () => {
+    const redacted = redactSensitive("hello\nTOKEN=abc\npassword=secret");
+    expect(redacted).toContain("hello");
+    expect(redacted).not.toContain("abc");
+    expect(redacted).not.toContain("secret");
+  });
+
+  it("does not hide ordinary mentions of token words", () => {
+    expect(redactSensitive("approval token has expired")).toBe("approval token has expired");
   });
 });

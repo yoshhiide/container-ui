@@ -91,8 +91,31 @@ export function formatDateTime(value: string | number | null | undefined): strin
 
 export function summarizeError(error: CommandFailure | null | undefined): string {
   if (!error) return "";
-  const detail = error.stderr.trim() || error.message;
+  const detail = redactSensitive(error.stderr.trim() || error.message);
   return `${error.kind}: ${detail}`;
+}
+
+export function redactSensitive(input: string): string {
+  return input
+    .split("\n")
+    .map((line) => {
+      if (hasSensitiveMarker(line)) {
+        return "[masked sensitive line]";
+      }
+      return line;
+    })
+    .join("\n");
+}
+
+function hasSensitiveMarker(line: string): boolean {
+  const upper = line.toUpperCase();
+  if (upper.includes("BEGIN PRIVATE KEY")) return true;
+  return ["TOKEN", "SECRET", "PASSWORD", "PRIVATE_KEY", "ACCESS_KEY", "ACCESSKEY"].some(
+    (needle) =>
+      upper.includes(`${needle}=`) ||
+      upper.includes(`${needle}:`) ||
+      upper.includes(`"${needle}"`),
+  );
 }
 
 export function statusTone(state: string): "good" | "warn" | "bad" | "muted" {

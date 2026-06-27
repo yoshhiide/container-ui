@@ -3,6 +3,8 @@ import type {
   ActivityRecord,
   OperationResult,
   Snapshot,
+  StopApprovalChallenge,
+  StopApprovalInput,
   TextResult,
 } from "./types";
 
@@ -74,12 +76,27 @@ export async function startContainer(containerId: string): Promise<OperationResu
   return invoke<OperationResult>("start_container", { containerId });
 }
 
-export async function stopContainer(containerId: string): Promise<OperationResult> {
+export async function requestStopApproval(containerId: string): Promise<StopApprovalChallenge> {
   if (!isTauriRuntime()) {
-    mockActivity.unshift(mockOperation("container_stop", containerId, true));
+    return delayed({
+      approvalId: `mock-${Date.now()}`,
+      containerId,
+      requiredPhrase: `STOP ${containerId}`,
+      expiresAtMs: Date.now() + 120_000,
+    });
+  }
+  return invoke<StopApprovalChallenge>("request_stop_approval", { containerId });
+}
+
+export async function stopContainer(
+  containerId: string,
+  approval: StopApprovalInput,
+): Promise<OperationResult> {
+  if (!isTauriRuntime()) {
+    mockActivity.unshift(mockOperation("container_stop", containerId, true, approval));
     return delayed({ stdout: "", stderr: "", command: "mock stop", durationMs: 10 });
   }
-  return invoke<OperationResult>("stop_container", { containerId });
+  return invoke<OperationResult>("stop_container", { containerId, approval });
 }
 
 export async function getActivity(): Promise<ActivityRecord[]> {
@@ -93,7 +110,12 @@ function delayed<T>(value: T): Promise<T> {
   });
 }
 
-function mockOperation(action: string, containerId: string, success: boolean): ActivityRecord {
+function mockOperation(
+  action: string,
+  containerId: string,
+  success: boolean,
+  approval?: StopApprovalInput,
+): ActivityRecord {
   return {
     id: `${Date.now()}-${action}`,
     action,
@@ -103,6 +125,9 @@ function mockOperation(action: string, containerId: string, success: boolean): A
     success,
     exitCode: success ? 0 : 1,
     stderr: "",
+    requestedBy: approval ? "local-user" : undefined,
+    approvalId: approval?.approvalId,
+    approvalReason: approval?.reason,
   };
 }
 
