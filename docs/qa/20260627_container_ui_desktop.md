@@ -48,7 +48,7 @@ container create --name container-ui-smoke docker.io/library/node:24.18.0-bookwo
 /opt/homebrew/bin/cliclick c:2064,587
 printf 'STOP container-ui-smoke' | pbcopy
 # app focused: paste into the confirmation field
-printf 'QA final packaged stop verification' | pbcopy
+printf 'QA hashed approval stop verification' | pbcopy
 # app focused: paste into the reason field
 /opt/homebrew/bin/cliclick c:2066,774
 container delete container-ui-smoke
@@ -63,7 +63,7 @@ container delete container-ui-smoke
 - `npm run typecheck`: pass。
 - `npm run lint`: pass。
 - `npm test`: 1 file / 7 tests pass。
-- `cargo test --manifest-path src-tauri/Cargo.toml`: 8 tests pass。
+- `cargo test --manifest-path src-tauri/Cargo.toml`: 10 tests pass。
 - `npm run build`: pass。
 - `npm run tauri:build`: pass。
 - `mise run local-check`: mise の trust ガードで未実行。ユーザーの trust 設定は変更せず、同タスク内の実コマンドは個別に成功確認済み。
@@ -84,10 +84,10 @@ container delete container-ui-smoke
 - `buildkit` は managed container として表示され、Stop ボタンが無効化されていることを確認した。
 - パッケージ済み `.app` で `container-ui-smoke` の `Stop` ボタンをクリックし、承認ダイアログで次を入力した。
   - Required phrase: `STOP container-ui-smoke`
-  - Reason: `QA final packaged stop verification`
+  - Reason: `QA hashed approval stop verification`
 - 承認付き Stop 後、CLI 状態が `stopped` になった。
-- activity log に `container_stop_approval_requested` と `container_stop` が同じ `approvalId` で記録された。
-- `container_stop` は `requestedBy: local-user:yoshihide`、`approvalReason: QA final packaged stop verification` 付きで記録された。
+- activity log に `container_stop_approval_requested`、`container_stop_pending`、`container_stop` が同じ hashed `approvalId` で記録された。
+- `container_stop` は `requestedBy: local-user:yoshihide`、`approvalReason: QA hashed approval stop verification` 付きで記録された。
 - activity log は最新 150 件に圧縮されるため、後続の自動更新で古い検証レコードはローテーションされる。
 - `container-ui-smoke` は停止後に CLI で削除し、`container list --all --format json` に残っていないことを確認した。
 

@@ -75,11 +75,12 @@ Guardrails:
 - Container IDs are validated before they are passed as CLI arguments.
 - The child process environment is cleared and rebuilt with a small allow-list.
 - CLI stdout/stderr is read through bounded streaming buffers before it is returned to the app.
+- Start is allowed without an approval challenge because it is limited to an existing container ID and cannot create new workloads, change images, attach shells, or mutate storage topology. If future Start behavior gains those capabilities, it must move behind the same approval path as Stop.
 - Stop requests require a fresh in-memory approval challenge, the phrase `STOP <container-id>`, and a human-readable reason of 4 to 180 characters.
 - Stop approval challenges expire after 120 seconds and are consumed after one successful validation.
-- Containers identified as apple/container managed resources, such as `buildkit`, are visually marked and cannot be stopped from Container UI.
+- Containers identified as apple/container managed resources, such as `buildkit` or containers with apple/container managed labels, are visually marked and cannot be stopped from Container UI.
 - Visible logs, inspect text, command errors, and activity stderr mask lines that look like secrets.
-- Stop approval requests and stop executions require activity log writes. The backend keeps the latest 150 activity records and surfaces corrupt log lines as failed `activity_corrupt_line` records.
+- Stop approval requests, pending Stop records, and Stop executions require activity log writes. The backend keeps the latest 150 activity records and surfaces corrupt or unreadable log lines as failed activity records.
 
 Activity is stored at:
 

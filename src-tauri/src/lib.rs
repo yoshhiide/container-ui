@@ -81,7 +81,7 @@ struct StopApprovalInput {
 
 #[derive(Debug, Clone)]
 struct ApprovalAudit {
-    approval_id: String,
+    audit_approval_id: String,
     reason: String,
     requested_by: String,
 }
@@ -198,7 +198,7 @@ fn get_container_logs(
     };
     let output = run_container(&app, "container_logs", &args, LOG_TIMEOUT_MS)?;
     Ok(TextResult {
-        text: output.stdout,
+        text: mask_sensitive(&output.stdout),
         command: output.command,
         duration_ms: output.duration_ms,
     })
@@ -220,7 +220,7 @@ fn request_stop_approval(
     container_id: String,
 ) -> Result<StopApprovalChallenge, CommandFailure> {
     let id = validate_container_id(&container_id)?;
-    ensure_stop_allowed(&id)?;
+    ensure_stop_allowed(&app, &id)?;
     let approval_id = Uuid::new_v4().to_string();
     let required_phrase = expected_stop_phrase(&id);
     let expires_at_ms = now_ms() + STOP_APPROVAL_TTL_MS;
@@ -255,7 +255,7 @@ fn request_stop_approval(
             exit_code: None,
             stderr: String::new(),
             requested_by: Some(requested_by),
-            approval_id: Some(approval_id.clone()),
+            approval_id: Some(audit_approval_id(&approval_id)),
             approval_reason: None,
         },
         true,
@@ -277,14 +277,46 @@ fn stop_container(
     approval: StopApprovalInput,
 ) -> Result<OperationResult, CommandFailure> {
     let id = validate_container_id(&container_id)?;
-    ensure_stop_allowed(&id)?;
+    ensure_stop_allowed(&app, &id)?;
     let audit = validate_stop_approval(&state, &id, approval)?;
+    record_activity(
+        &app,
+        ActivityRecord {
+            id: activity_id(now_ms(), "container_stop_pending"),
+            action: "container_stop_pending".to_string(),
+            command: format!("container stop {id}"),
+            started_at_ms: now_ms(),
+            duration_ms: 0,
+            success: true,
+            exit_code: None,
+            stderr: String::new(),
+            requested_by: Some(audit.requested_by.clone()),
+            approval_id: Some(audit.audit_approval_id.clone()),
+            approval_reason: Some(audit.reason.clone()),
+        },
+        true,
+    )?;
     run_operation_with_audit(&app, "container_stop", &["stop", &id], Some(&audit))
 }
 
 #[tauri::command]
 fn get_activity(app: AppHandle) -> Vec<ActivityRecord> {
-    read_activity(&app).unwrap_or_default()
+    match read_activity(&app) {
+        Ok(records) => records,
+        Err(err) => vec![ActivityRecord {
+            id: activity_id(now_ms(), "activity_read_failed"),
+            action: "activity_read_failed".to_string(),
+            command: "activity.jsonl".to_string(),
+            started_at_ms: now_ms(),
+            duration_ms: 0,
+            success: false,
+            exit_code: None,
+            stderr: mask_sensitive(&format!("failed to read activity log: {err}")),
+            requested_by: None,
+            approval_id: None,
+            approval_reason: None,
+        }],
+    }
 }
 
 fn run_operation(
@@ -468,7 +500,7 @@ fn run_container_with_audit(
             exit_code,
             stderr: mask_sensitive(&stderr),
             requested_by: approval.map(|item| item.requested_by.clone()),
-            approval_id: approval.map(|item| item.approval_id.clone()),
+            approval_id: approval.map(|item| item.audit_approval_id.clone()),
             approval_reason: approval.map(|item| item.reason.clone()),
         },
         approval.is_some(),
@@ -608,7 +640,7 @@ fn validate_stop_approval(
 
     tokens.remove(&input.approval_id);
     Ok(ApprovalAudit {
-        approval_id: input.approval_id,
+        audit_approval_id: audit_approval_id(&input.approval_id),
         reason,
         requested_by: grant.requested_by,
     })
@@ -623,6 +655,7 @@ fn validate_container_id(input: &str) -> Result<String, CommandFailure> {
     let id = input.trim();
     let valid = !id.is_empty()
         && id.len() <= 128
+        && !id.starts_with('-')
         && id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'));
@@ -747,7 +780,7 @@ fn redact_json_value(value: &mut Value) {
         }
         Value::Object(map) => {
             for (key, item) in map {
-                if has_sensitive_marker(key) {
+                if is_sensitive_key(key) {
                     *item = Value::String("[masked sensitive value]".to_string());
                 } else {
                     redact_json_value(item);
@@ -764,6 +797,22 @@ fn has_sensitive_marker(line: &str) -> bool {
         return true;
     }
 
+    sensitive_key_markers().iter().any(|needle| {
+        upper.contains(&format!("{needle}="))
+            || upper.contains(&format!("{needle}:"))
+            || upper.contains(&format!("\"{needle}\""))
+    }) || upper.contains("BEARER ")
+        || has_url_userinfo(line)
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    let normalized = normalize_key_marker(key);
+    sensitive_key_markers()
+        .iter()
+        .any(|needle| normalize_key_marker(needle) == normalized)
+}
+
+fn sensitive_key_markers() -> [&'static str; 10] {
     [
         "TOKEN",
         "SECRET",
@@ -776,13 +825,13 @@ fn has_sensitive_marker(line: &str) -> bool {
         "AUTHORIZATION",
         "AWS_SECRET_ACCESS_KEY",
     ]
-    .iter()
-    .any(|needle| {
-        upper.contains(&format!("{needle}="))
-            || upper.contains(&format!("{needle}:"))
-            || upper.contains(&format!("\"{needle}\""))
-    }) || upper.contains("BEARER ")
-        || has_url_userinfo(line)
+}
+
+fn normalize_key_marker(key: &str) -> String {
+    key.chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(|character| character.to_uppercase())
+        .collect()
 }
 
 fn has_url_userinfo(line: &str) -> bool {
@@ -800,8 +849,10 @@ fn has_url_userinfo(line: &str) -> bool {
     authority[..at_index].contains(':')
 }
 
-fn ensure_stop_allowed(container_id: &str) -> Result<(), CommandFailure> {
-    if is_protected_container_id(container_id) {
+fn ensure_stop_allowed(app: &AppHandle, container_id: &str) -> Result<(), CommandFailure> {
+    if is_protected_container_id(container_id)
+        || inspect_indicates_managed_container(app, container_id)?
+    {
         Err(CommandFailure {
             kind: "protected_container_stop_blocked".to_string(),
             message: "managed apple/container resources cannot be stopped from Container UI"
@@ -817,6 +868,49 @@ fn ensure_stop_allowed(container_id: &str) -> Result<(), CommandFailure> {
 
 fn is_protected_container_id(container_id: &str) -> bool {
     container_id == "buildkit"
+}
+
+fn inspect_indicates_managed_container(
+    app: &AppHandle,
+    container_id: &str,
+) -> Result<bool, CommandFailure> {
+    let output = run_container(
+        app,
+        "container_stop_preflight_inspect",
+        &["inspect", container_id],
+        DEFAULT_TIMEOUT_MS,
+    )?;
+    let value = parse_json_output(&output)?;
+    Ok(json_has_managed_container_marker(&value))
+}
+
+fn json_has_managed_container_marker(value: &Value) -> bool {
+    match value {
+        Value::Array(items) => items.iter().any(json_has_managed_container_marker),
+        Value::Object(map) => {
+            for (key, item) in map {
+                let key_lower = key.to_ascii_lowercase();
+                if key_lower == "labels" && labels_indicate_managed(item) {
+                    return true;
+                }
+                if json_has_managed_container_marker(item) {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+fn labels_indicate_managed(value: &Value) -> bool {
+    let Value::Object(labels) = value else {
+        return false;
+    };
+
+    labels.keys().any(|key| {
+        key == "com.apple.container.plugin" || key == "com.apple.container.resource.role"
+    })
 }
 
 fn audit_actor(app: &AppHandle) -> String {
@@ -837,6 +931,15 @@ fn audit_actor(app: &AppHandle) -> String {
         .unwrap_or_else(|| "local-user:unknown".to_string())
 }
 
+fn audit_approval_id(approval_id: &str) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in approval_id.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("approval:{hash:016x}")
+}
+
 fn activity_id(started_at_ms: u128, action: &str) -> String {
     format!("{started_at_ms}-{action}")
 }
@@ -844,6 +947,11 @@ fn activity_id(started_at_ms: u128, action: &str) -> String {
 fn activity_path(app: &AppHandle) -> Option<PathBuf> {
     let dir = app.path().app_data_dir().ok()?;
     Some(dir.join("activity.jsonl"))
+}
+
+fn required_activity_path(app: &AppHandle) -> Result<PathBuf, std::io::Error> {
+    let dir = app.path().app_data_dir().map_err(std::io::Error::other)?;
+    Ok(dir.join("activity.jsonl"))
 }
 
 fn record_activity(
@@ -865,11 +973,11 @@ fn record_activity(
 }
 
 fn append_activity(app: &AppHandle, record: ActivityRecord) -> Result<(), std::io::Error> {
-    let Some(path) = activity_path(app) else {
-        return Ok(());
-    };
+    let path = required_activity_path(app)?;
     let Some(parent) = path.parent() else {
-        return Ok(());
+        return Err(std::io::Error::other(
+            "activity path has no parent directory",
+        ));
     };
     create_dir_all(parent)?;
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
@@ -887,9 +995,34 @@ fn read_activity(app: &AppHandle) -> Result<Vec<ActivityRecord>, std::io::Error>
     let reader = BufReader::new(file);
     let mut records = VecDeque::with_capacity(ACTIVITY_LIMIT);
 
-    for (line_index, line) in reader.lines().map_while(Result::ok).enumerate() {
+    for (line_index, line_result) in reader.lines().enumerate() {
+        let line = match line_result {
+            Ok(line) => line,
+            Err(err) => {
+                push_bounded_activity(
+                    &mut records,
+                    ActivityRecord {
+                        id: activity_id(now_ms(), "activity_read_line_failed"),
+                        action: "activity_read_line_failed".to_string(),
+                        command: "activity.jsonl".to_string(),
+                        started_at_ms: now_ms(),
+                        duration_ms: 0,
+                        success: false,
+                        exit_code: None,
+                        stderr: mask_sensitive(&format!(
+                            "failed to read activity log line {}: {err}",
+                            line_index + 1
+                        )),
+                        requested_by: None,
+                        approval_id: None,
+                        approval_reason: None,
+                    },
+                );
+                continue;
+            }
+        };
         let record = match serde_json::from_str::<ActivityRecord>(&line) {
-            Ok(record) => record,
+            Ok(record) => sanitize_activity_record(record),
             Err(err) => ActivityRecord {
                 id: activity_id(now_ms(), "activity_corrupt_line"),
                 action: "activity_corrupt_line".to_string(),
@@ -907,13 +1040,30 @@ fn read_activity(app: &AppHandle) -> Result<Vec<ActivityRecord>, std::io::Error>
                 approval_reason: None,
             },
         };
-        if records.len() == ACTIVITY_LIMIT {
-            records.pop_front();
-        }
-        records.push_back(record);
+        push_bounded_activity(&mut records, record);
     }
 
     Ok(records.into_iter().rev().collect())
+}
+
+fn sanitize_activity_record(mut record: ActivityRecord) -> ActivityRecord {
+    record.stderr = mask_sensitive(&record.stderr);
+    record.approval_reason = record.approval_reason.as_deref().map(mask_sensitive);
+    record.approval_id = record.approval_id.as_deref().map(|approval_id| {
+        if approval_id.starts_with("approval:") {
+            approval_id.to_string()
+        } else {
+            audit_approval_id(approval_id)
+        }
+    });
+    record
+}
+
+fn push_bounded_activity(records: &mut VecDeque<ActivityRecord>, record: ActivityRecord) {
+    if records.len() == ACTIVITY_LIMIT {
+        records.pop_front();
+    }
+    records.push_back(record);
 }
 
 fn compact_activity(app: &AppHandle) -> Result<(), std::io::Error> {
@@ -965,9 +1115,10 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_stop_allowed, expected_stop_phrase, mask_sensitive, trim_bytes,
-        validate_container_id, validate_stop_reason,
+        audit_approval_id, expected_stop_phrase, json_has_managed_container_marker, mask_sensitive,
+        redact_json_value, trim_bytes, validate_container_id, validate_stop_reason,
     };
+    use serde_json::json;
 
     #[test]
     fn validates_safe_container_ids() {
@@ -981,6 +1132,7 @@ mod tests {
         assert!(validate_container_id("../etc/passwd").is_err());
         assert!(validate_container_id("bad id").is_err());
         assert!(validate_container_id("$(rm -rf /)").is_err());
+        assert!(validate_container_id("--help").is_err());
     }
 
     #[test]
@@ -1026,7 +1178,37 @@ mod tests {
 
     #[test]
     fn blocks_protected_container_stop_targets() {
-        assert!(ensure_stop_allowed("buildkit").is_err());
-        assert!(ensure_stop_allowed("container-ui-smoke").is_ok());
+        let managed = json!({
+            "configuration": {
+                "labels": {
+                    "com.apple.container.plugin": "builder"
+                }
+            }
+        });
+        assert!(json_has_managed_container_marker(&managed));
+        assert!(!json_has_managed_container_marker(
+            &json!({"configuration": {"labels": {}}})
+        ));
+    }
+
+    #[test]
+    fn redacts_sensitive_json_keys() {
+        let mut value = json!({
+            "apiKey": "abc",
+            "authorization": "Bearer def",
+            "nested": {"normal": "visible"}
+        });
+        redact_json_value(&mut value);
+        let text = value.to_string();
+        assert!(!text.contains("abc"));
+        assert!(!text.contains("Bearer def"));
+        assert!(text.contains("visible"));
+    }
+
+    #[test]
+    fn creates_non_secret_approval_fingerprints() {
+        let fingerprint = audit_approval_id("12345678-1234-1234-1234-123456789abc");
+        assert!(fingerprint.starts_with("approval:"));
+        assert!(!fingerprint.contains("12345678-1234"));
     }
 }
