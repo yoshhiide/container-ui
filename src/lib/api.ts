@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { redactSensitive } from "./format";
 import type {
   ActivityRecord,
   OperationResult,
@@ -127,7 +128,7 @@ function mockOperation(
     stderr: "",
     requestedBy: approval ? "local-user" : undefined,
     approvalId: approval?.approvalId,
-    approvalReason: approval?.reason,
+    approvalReason: approval ? redactSensitive(approval.reason) : undefined,
   };
 }
 

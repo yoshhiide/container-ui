@@ -96,13 +96,22 @@ export function summarizeError(error: CommandFailure | null | undefined): string
 }
 
 export function redactSensitive(input: string): string {
+  let inPrivateKey = false;
   return input
     .split("\n")
     .map((line) => {
-      if (hasSensitiveMarker(line)) {
+      const upper = line.toUpperCase();
+      if (inPrivateKey) {
+        if (upper.includes("END ") && upper.includes("PRIVATE KEY")) {
+          inPrivateKey = false;
+        }
         return "[masked sensitive line]";
       }
-      return line;
+      if (upper.includes("BEGIN ") && upper.includes("PRIVATE KEY")) {
+        inPrivateKey = true;
+        return "[masked sensitive line]";
+      }
+      return hasSensitiveMarker(line) ? "[masked sensitive line]" : line;
     })
     .join("\n");
 }
@@ -110,12 +119,36 @@ export function redactSensitive(input: string): string {
 function hasSensitiveMarker(line: string): boolean {
   const upper = line.toUpperCase();
   if (upper.includes("BEGIN PRIVATE KEY")) return true;
-  return ["TOKEN", "SECRET", "PASSWORD", "PRIVATE_KEY", "ACCESS_KEY", "ACCESSKEY"].some(
-    (needle) =>
-      upper.includes(`${needle}=`) ||
-      upper.includes(`${needle}:`) ||
-      upper.includes(`"${needle}"`),
+  return (
+    [
+      "TOKEN",
+      "SECRET",
+      "PASSWORD",
+      "PRIVATE_KEY",
+      "ACCESS_KEY",
+      "ACCESSKEY",
+      "API_KEY",
+      "APIKEY",
+      "AUTHORIZATION",
+      "AWS_SECRET_ACCESS_KEY",
+    ].some(
+      (needle) =>
+        upper.includes(`${needle}=`) ||
+        upper.includes(`${needle}:`) ||
+        upper.includes(`"${needle}"`),
+    ) ||
+    upper.includes("BEARER ") ||
+    hasUrlUserInfo(line)
   );
+}
+
+function hasUrlUserInfo(line: string): boolean {
+  const schemeIndex = line.indexOf("://");
+  if (schemeIndex === -1) return false;
+  const afterScheme = line.slice(schemeIndex + 3);
+  const authority = afterScheme.split(/[/?#\s]/)[0] ?? "";
+  const atIndex = authority.indexOf("@");
+  return atIndex > 0 && authority.slice(0, atIndex).includes(":");
 }
 
 export function statusTone(state: string): "good" | "warn" | "bad" | "muted" {

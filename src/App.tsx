@@ -517,6 +517,7 @@ function ContainersView({
                 const state = containerState(container);
                 const stats = statsById.get(id);
                 const active = selectedId === id;
+                const stopBlocked = isRunning(container) && isProtectedContainer(container);
                 return (
                   <tr key={id} className={active ? "selected" : ""} onClick={() => onSelect(id)}>
                     <td>
@@ -537,10 +538,11 @@ function ContainersView({
                       <button
                         className="row-action"
                         type="button"
-                        title={isRunning(container) ? "Stop" : "Start"}
-                        disabled={operatingId === id}
+                        title={stopBlocked ? "Managed container cannot be stopped" : isRunning(container) ? "Stop" : "Start"}
+                        disabled={operatingId === id || stopBlocked}
                         onClick={(event) => {
                           event.stopPropagation();
+                          if (stopBlocked) return;
                           onAction(container, isRunning(container) ? "stop" : "start");
                         }}
                       >
@@ -745,8 +747,10 @@ function ActivityView({ activity }: { activity: ActivityRecord[] }) {
                   <StatusPill label={record.success ? "ok" : "failed"} tone={record.success ? "good" : "bad"} />
                 </td>
                 <td>{record.durationMs} ms</td>
-                <td className="truncate" title={record.approvalReason ?? ""}>
-                  {record.approvalId ? record.requestedBy ?? "approved" : "-"}
+                <td className="truncate" title={record.approvalId ?? ""}>
+                  {record.approvalId
+                    ? [record.requestedBy ?? "approved", record.approvalReason ?? record.approvalId].join(" / ")
+                    : "-"}
                 </td>
                 <td className="truncate">{record.command}</td>
               </tr>

@@ -48,4 +48,19 @@ describe("format helpers", () => {
   it("does not hide ordinary mentions of token words", () => {
     expect(redactSensitive("approval token has expired")).toBe("approval token has expired");
   });
+
+  it("redacts broader credential shapes", () => {
+    const redacted = redactSensitive([
+      "Authorization: Bearer abc",
+      "API_KEY=def",
+      "https://user:pass@example.com/path",
+      "-----BEGIN PRIVATE KEY-----",
+      "abc123",
+      "-----END PRIVATE KEY-----",
+    ].join("\n"));
+    expect(redacted).not.toContain("Bearer abc");
+    expect(redacted).not.toContain("def");
+    expect(redacted).not.toContain("user:pass");
+    expect(redacted).not.toContain("abc123");
+  });
 });

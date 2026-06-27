@@ -45,7 +45,7 @@ The debug build may use `CONTAINER_UI_CONTAINER_BIN`, but only when it points to
 Common local commands are also available through `mise`:
 
 - `mise run local-dev`: run the Vite browser preview.
-- `mise run local-check`: run npm audit, TypeScript, lint, frontend tests, Rust tests, and frontend build.
+- `mise run local-check`: run npm audit, npm registry signature checks, TypeScript, lint, frontend tests, Rust tests, and frontend build.
 - `mise run local-package`: build the packaged macOS Tauri app.
 
 ## Packaging
@@ -66,17 +66,20 @@ The desktop backend uses `std::process::Command` with fixed `container` argument
 Allowed operations:
 
 - Read-only: `--version`, `system status`, `list --all`, `image list`, `volume list`, `network list`, `stats --no-stream`, `inspect`, `logs`
-- Mutating: `start`, `stop`
+- Mutating: `start`, `stop` for non-managed containers
+
+Forbidden operations include `run`, `create`, `delete`, `exec`, `shell`, `prune`, image pull/push/remove, volume create/remove, network create/remove, plugin operations, and arbitrary command strings.
 
 Guardrails:
 
 - Container IDs are validated before they are passed as CLI arguments.
 - The child process environment is cleared and rebuilt with a small allow-list.
+- CLI stdout/stderr is read through bounded streaming buffers before it is returned to the app.
 - Stop requests require a fresh in-memory approval challenge, the phrase `STOP <container-id>`, and a human-readable reason of 4 to 180 characters.
 - Stop approval challenges expire after 120 seconds and are consumed after one successful validation.
-- Containers identified as apple/container managed resources, such as `buildkit`, are visually marked before stop confirmation.
+- Containers identified as apple/container managed resources, such as `buildkit`, are visually marked and cannot be stopped from Container UI.
 - Visible logs, inspect text, command errors, and activity stderr mask lines that look like secrets.
-- The backend keeps the latest 150 activity records.
+- Stop approval requests and stop executions require activity log writes. The backend keeps the latest 150 activity records and surfaces corrupt log lines as failed `activity_corrupt_line` records.
 
 Activity is stored at:
 
