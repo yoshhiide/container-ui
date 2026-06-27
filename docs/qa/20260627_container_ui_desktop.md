@@ -1,0 +1,106 @@
+# Container UI desktop QA
+
+## 確認日
+
+2026-06-27 / 2026-06-28 JST
+
+## 対象環境
+
+- macOS 26.3
+- Node.js v22.23.0
+- npm 10.9.8
+- rustc 1.92.0
+- cargo 1.92.0
+- `container CLI version 1.0.0 (build: release, commit: ee848e3)`
+- `container system status --format json`: `running`
+
+## 指示の解釈
+
+ローカルにインストールされ使用中の `apple/container` を対象に、軽量なデスクトップ管理アプリを実装し、UI 確認を随時行い、最終的にパッケージ済み `.app` で動作確認するタスクとして扱った。
+
+## 使用データ
+
+- 既存 running container: `buildkit`, `agentab-dev-up`
+- 一時確認 container: `container-ui-smoke`
+  - 作成: `container create --name container-ui-smoke docker.io/library/node:24.18.0-bookworm sleep 1800`
+  - UI Start 確認後 state: `running`
+  - UI Stop 確認後 state: `stopped`
+  - 削除: `container delete container-ui-smoke`
+
+## 実行コマンド
+
+```bash
+git fetch --all --prune
+npm install
+npm audit --audit-level=moderate
+npm audit signatures --json
+npm run typecheck
+npm run lint
+npm test
+cargo test --manifest-path src-tauri/Cargo.toml
+npm run build
+npm run tauri:build
+mise run local-check
+open -n "src-tauri/target/release/bundle/macos/Container UI.app"
+container list --all --format json
+container create --name container-ui-smoke docker.io/library/node:24.18.0-bookworm sleep 1800
+/opt/homebrew/bin/cliclick c:2076,588
+/opt/homebrew/bin/cliclick c:2064,587
+printf 'STOP container-ui-smoke' | pbcopy
+# app focused: paste into the confirmation field
+printf 'QA packaged app stop verification' | pbcopy
+# app focused: paste into the reason field
+/opt/homebrew/bin/cliclick c:2066,774
+container delete container-ui-smoke
+```
+
+## 確認結果
+
+- Vite preview で desktop viewport と mobile viewport を確認した。
+- Browser preview では Dashboard / Containers / Images / Activity の主要ナビゲーションを確認した。
+- `npm audit --audit-level=moderate`: 0 vulnerabilities。
+- `npm audit signatures --json`: `invalid: []`, `missing: []`。
+- `npm run typecheck`: pass。
+- `npm run lint`: pass。
+- `npm test`: 1 file / 6 tests pass。
+- `cargo test --manifest-path src-tauri/Cargo.toml`: 5 tests pass。
+- `npm run build`: pass。
+- `npm run tauri:build`: pass。
+- `mise run local-check`: mise の trust ガードで未実行。ユーザーの trust 設定は変更せず、同タスク内の実コマンドは個別に成功確認済み。
+- 生成物:
+  - `src-tauri/target/release/bundle/macos/Container UI.app`
+  - `src-tauri/target/release/bundle/dmg/Container UI_0.1.0_aarch64.dmg`
+- パッケージ済み `.app` 起動後、activity log に次の実 CLI 呼び出し成功が記録された。
+  - `container --version`
+  - `container system status --format json`
+  - `container list --all --format json`
+  - `container image list --format json --verbose`
+  - `container volume list --format json`
+  - `container network list --format json`
+  - `container stats --format json --no-stream`
+  - `container inspect buildkit`
+  - `container logs -n 200 buildkit`
+- パッケージ済み `.app` で `container-ui-smoke` の `Start` ボタンをクリックし、`container_start` が activity log に記録され、CLI 状態が `running` になった。
+- パッケージ済み `.app` で `container-ui-smoke` の `Stop` ボタンをクリックし、承認ダイアログで次を入力した。
+  - Required phrase: `STOP container-ui-smoke`
+  - Reason: `QA packaged app stop verification`
+- 承認付き Stop 後、CLI 状態が `stopped` になった。
+- activity log に `container_stop` が `requestedBy: local-user`、`approvalId`、`approvalReason` 付きで記録された。
+- activity log は最新 150 件に圧縮されるため、後続の自動更新で古い検証レコードはローテーションされる。
+- `container-ui-smoke` は停止後に CLI で削除し、`container list --all --format json` に残っていないことを確認した。
+
+## 発見した不具合と対応
+
+- 初期テーブルでは操作列が視認しづらかった。
+  - 対応: 行アクションをアイコン単独から `Start` / `Stop` ラベル付きボタンに変更した。
+- npm audit で Vitest 2 系由来の脆弱性が出た。
+  - 対応: Vitest 4 系に更新し、audit 0 件を確認した。
+- Stop 失敗時のエラー表示が `token` という通常語まで secret と判定してマスクされ、原因が読めなかった。
+  - 対応: secret マスクを `TOKEN=` / `PASSWORD=` などのキー形式に限定し、通常の承認エラーメッセージは表示できるようにした。
+- `cliclick` の直接タイプはキーボード配列の影響で文字が崩れる場合があった。
+  - 対応: QA 操作ではクリップボード貼り付けで確認文と理由を正確に入力した。
+
+## 関連 Issue / PR
+
+- Issue: https://github.com/yoshhiide/container-ui/issues/1
+- PR: 未作成
