@@ -73,23 +73,6 @@ Build artifacts are generated under:
 - `src-tauri/target/release/bundle/macos/Container UI.app`
 - `src-tauri/target/release/bundle/dmg/Container UI_0.1.0_aarch64.dmg`
 
-## Security Model
-
-The desktop backend executes fixed `container` command patterns only. The frontend cannot submit arbitrary shell commands or arbitrary CLI arguments.
-
-Key guardrails:
-
-- Container IDs are validated before use.
-- Stop requires a fresh approval challenge, `STOP <container-id>`, and a reason.
-- Managed apple/container resources such as `buildkit` cannot be stopped from Container UI.
-- Logs, inspect output, command errors, and activity records mask likely secrets.
-
-Activity records are stored at:
-
-```text
-~/Library/Application Support/app.yoshhiide.container-ui/activity.jsonl
-```
-
 ## License
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
