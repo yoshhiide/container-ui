@@ -28,6 +28,35 @@ Lightweight macOS desktop console that makes local [`apple/container`](https://g
 - Node.js 24.18.0.
 - Rust/Cargo.
 
+## Distribution
+
+Signed and notarized macOS builds are distributed through GitHub Releases:
+
+- [Container UI 0.1.0](https://github.com/yoshhiide/container-ui/releases/tag/0.1.0)
+
+Download the release DMG:
+
+```bash
+curl -L -o Container.UI_0.1.0_aarch64.dmg \
+  https://github.com/yoshhiide/container-ui/releases/download/0.1.0/Container.UI_0.1.0_aarch64.dmg
+```
+
+Verify the downloaded file:
+
+```bash
+shasum -a 256 Container.UI_0.1.0_aarch64.dmg
+xcrun stapler validate Container.UI_0.1.0_aarch64.dmg
+spctl --assess --type open --context context:primary-signature --verbose=4 Container.UI_0.1.0_aarch64.dmg
+```
+
+Expected SHA-256:
+
+```text
+032383504fd44e2d57d7c6cdfc5e0d4077ab8ea8d1fac8f678d4d7765e6f7961
+```
+
+The release DMG has been accepted by Gatekeeper with `source=Notarized Developer ID`.
+
 ## Development
 
 ```bash
@@ -97,3 +126,7 @@ Activity is stored at:
 ```text
 ~/Library/Application Support/app.yoshhiide.container-ui/activity.jsonl
 ```
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
