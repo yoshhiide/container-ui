@@ -10,6 +10,11 @@ Lightweight macOS desktop console for the local [`apple/container`](https://gith
 - Stops containers only after a backend-issued approval challenge is confirmed in the UI.
 - Writes a local command activity log under the app data directory.
 - Uses a browser-preview mock when the frontend runs outside Tauri, so UI layout can be checked with Vite.
+- Uses an original generated app icon bundled into the macOS app.
+
+## Screenshot
+
+![Container UI containers view](docs/assets/container-ui-containers.png)
 
 ## Requirements
 
@@ -81,6 +86,7 @@ Guardrails:
 - Containers identified as apple/container managed resources, such as `buildkit` or containers with apple/container managed labels, are visually marked and cannot be stopped from Container UI.
 - Visible logs, inspect text, command errors, and activity stderr mask lines that look like secrets.
 - Stop approval requests, pending Stop records, and Stop executions require activity log writes. The backend keeps the latest 150 activity records and surfaces corrupt or unreadable log lines as failed activity records.
+- Activity log path resolution and compaction failures are surfaced as failed activity records or required audit write failures instead of being silently treated as empty logs.
 
 Activity is stored at:
 

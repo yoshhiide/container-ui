@@ -37,11 +37,15 @@ npm audit signatures --json
 npm run typecheck
 npm run lint
 npm test
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo test --manifest-path src-tauri/Cargo.toml
 npm run build
 npm run tauri:build
 mise run local-check
+npm run tauri -- icon src/assets/container-ui-icon.png
 open -n "src-tauri/target/release/bundle/macos/Container UI.app"
+container system status --format json
+container system start
 container list --all --format json
 container create --name container-ui-smoke docker.io/library/node:24.18.0-bookworm sleep 1800
 /opt/homebrew/bin/cliclick c:2076,588
@@ -58,12 +62,16 @@ container delete container-ui-smoke
 
 - Vite preview で desktop viewport と mobile viewport を確認した。
 - Browser preview では Dashboard / Containers / Images / Activity の主要ナビゲーションを確認した。
+- 2026-06-28 にオリジナルのアプリアイコンを生成し、`src/assets/container-ui-icon.png` と `src-tauri/icons/*` に反映した。
+- 2026-06-28 に Browser preview で Dashboard / Containers / Images / Activity / Stop dialog を 1280x780 と 980x640 で検査し、control overlap / horizontal overflow / unexpected text overflow が 0 件であることを確認した。
+- 2026-06-28 に packaged `.app` を再ビルドし、実アプリのウィンドウキャプチャを `docs/assets/container-ui-containers.png` として保存した。
 - `npm audit --audit-level=moderate`: 0 vulnerabilities。
 - `npm audit signatures --json`: `invalid: []`, `missing: []`。
 - `npm run typecheck`: pass。
 - `npm run lint`: pass。
 - `npm test`: 1 file / 7 tests pass。
-- `cargo test --manifest-path src-tauri/Cargo.toml`: 10 tests pass。
+- `cargo fmt --manifest-path src-tauri/Cargo.toml --check`: pass。
+- `cargo test --manifest-path src-tauri/Cargo.toml`: 11 tests pass。
 - `npm run build`: pass。
 - `npm run tauri:build`: pass。
 - `mise run local-check`: mise の trust ガードで未実行。ユーザーの trust 設定は変更せず、同タスク内の実コマンドは個別に成功確認済み。
@@ -90,6 +98,7 @@ container delete container-ui-smoke
 - `container_stop` は `requestedBy: local-user:yoshihide`、`approvalReason: QA hashed approval stop verification` 付きで記録された。
 - activity log は最新 150 件に圧縮されるため、後続の自動更新で古い検証レコードはローテーションされる。
 - `container-ui-smoke` は停止後に CLI で削除し、`container list --all --format json` に残っていないことを確認した。
+- 2026-06-28 の再撮影時に `container system status --format json` が一時的に `unregistered` を返したため、`container system start` で復旧し、CLI が `running` を返すことを確認してから packaged `.app` を再撮影した。
 
 ## 発見した不具合と対応
 
@@ -101,6 +110,10 @@ container delete container-ui-smoke
   - 対応: secret マスクを `TOKEN=` / `PASSWORD=` などのキー形式に限定し、通常の承認エラーメッセージは表示できるようにした。
 - `cliclick` の直接タイプはキーボード配列の影響で文字が崩れる場合があった。
   - 対応: QA 操作ではクリップボード貼り付けで確認文と理由を正確に入力した。
+- 実アプリキャプチャで `stopped` の State pill が `stoppe` までしか表示されなかった。
+  - 対応: Containers table を `Name / State / Workload / Memory / Action` に再設計し、State 列を広げて `stopped` が収まることを確認した。
+- Activity log の app data path 解決失敗と compaction path 解決失敗が空ログ/成功扱いに見える余地があった。
+  - 対応: `required_activity_path` を読み込み・圧縮にも使い、読み込み失敗は failed activity record、required audit write/compaction 失敗は操作失敗として表面化するようにした。
 
 ## 関連 Issue / PR
 

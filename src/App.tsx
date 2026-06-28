@@ -29,6 +29,7 @@ import {
   startContainer,
   stopContainer,
 } from "./lib/api";
+import appIcon from "./assets/container-ui-icon.png";
 import {
   containerId,
   containerImage,
@@ -239,7 +240,7 @@ function App() {
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">
-            <Boxes size={22} aria-hidden="true" />
+            <img src={appIcon} alt="" aria-hidden="true" />
           </div>
           <div>
             <strong>Container UI</strong>
@@ -255,6 +256,7 @@ function App() {
                 key={item.view}
                 className={view === item.view ? "nav-item active" : "nav-item"}
                 type="button"
+                aria-label={item.label}
                 onClick={() => setView(item.view)}
               >
                 <Icon size={18} aria-hidden="true" />
@@ -273,7 +275,13 @@ function App() {
           </div>
           <div className="topbar-actions">
             <StatusPill label={systemStatus} tone={systemStatus === "running" ? "good" : "bad"} />
-            <button className="icon-button" type="button" onClick={() => void loadSnapshot()} title="Refresh">
+            <button
+              className="icon-button"
+              type="button"
+              onClick={() => void loadSnapshot()}
+              title="Refresh"
+              aria-label="Refresh"
+            >
               {loading ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
             </button>
           </div>
@@ -500,13 +508,12 @@ function ContainersView({
           </div>
         </div>
         <div className="table-scroll">
-          <table>
+          <table className="containers-table">
             <thead>
               <tr>
                 <th>Name</th>
                 <th>State</th>
-                <th>Image</th>
-                <th>Ports</th>
+                <th>Workload</th>
                 <th>Memory</th>
                 <th aria-label="Actions" />
               </tr>
@@ -518,6 +525,8 @@ function ContainersView({
                 const stats = statsById.get(id);
                 const active = selectedId === id;
                 const stopBlocked = isRunning(container) && isProtectedContainer(container);
+                const image = containerImage(container);
+                const ports = publishedPorts(container.configuration?.publishedPorts);
                 return (
                   <tr key={id} className={active ? "selected" : ""} onClick={() => onSelect(id)}>
                     <td>
@@ -529,8 +538,12 @@ function ContainersView({
                     <td>
                       <StatusPill label={state} tone={statusTone(state)} />
                     </td>
-                    <td className="truncate">{containerImage(container)}</td>
-                    <td className="truncate">{publishedPorts(container.configuration?.publishedPorts)}</td>
+                    <td title={`${image} / ${ports}`}>
+                      <div className="workload-cell">
+                        <span>{image}</span>
+                        <small>{ports}</small>
+                      </div>
+                    </td>
                     <td>
                       <MiniMeter value={memoryPercent(stats)} label={formatBytes(stats?.memoryUsageBytes)} />
                     </td>
@@ -608,7 +621,7 @@ function ContainerDetail({
           <h2>{id}</h2>
           <p>{containerImage(container)}</p>
         </div>
-        <button className="icon-button" type="button" onClick={onReload} title="Reload detail">
+        <button className="icon-button" type="button" onClick={onReload} title="Reload detail" aria-label="Reload detail">
           {loading ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
         </button>
       </div>
@@ -678,7 +691,7 @@ function ImagesView({
           </div>
         </div>
         <div className="table-scroll">
-          <table>
+          <table className="images-table">
             <thead>
               <tr>
                 <th>Name</th>
@@ -690,8 +703,12 @@ function ImagesView({
             <tbody>
               {images.map((image) => (
                 <tr key={image.id ?? imageName(image)}>
-                  <td className="truncate">{imageName(image)}</td>
-                  <td>{imagePlatforms(image)}</td>
+                  <td className="truncate" title={imageName(image)}>
+                    {imageName(image)}
+                  </td>
+                  <td className="truncate" title={imagePlatforms(image)}>
+                    {imagePlatforms(image)}
+                  </td>
                   <td>{formatDateTime(image.configuration?.creationDate)}</td>
                   <td>{formatBytes(image.variants?.[0]?.size ?? image.configuration?.descriptor?.size)}</td>
                 </tr>
@@ -727,7 +744,7 @@ function ActivityView({ activity }: { activity: ActivityRecord[] }) {
         </div>
       </div>
       <div className="table-scroll">
-        <table>
+        <table className="activity-table">
           <thead>
             <tr>
               <th>Time</th>
@@ -742,7 +759,9 @@ function ActivityView({ activity }: { activity: ActivityRecord[] }) {
             {activity.map((record) => (
               <tr key={record.id}>
                 <td>{formatDateTime(record.startedAtMs)}</td>
-                <td>{record.action}</td>
+                <td className="truncate" title={record.action}>
+                  {record.action}
+                </td>
                 <td>
                   <StatusPill label={record.success ? "ok" : "failed"} tone={record.success ? "good" : "bad"} />
                 </td>
@@ -752,7 +771,9 @@ function ActivityView({ activity }: { activity: ActivityRecord[] }) {
                     ? [record.requestedBy ?? "approved", record.approvalReason ?? record.approvalId].join(" / ")
                     : "-"}
                 </td>
-                <td className="truncate">{record.command}</td>
+                <td className="truncate" title={record.command}>
+                  {record.command}
+                </td>
               </tr>
             ))}
           </tbody>

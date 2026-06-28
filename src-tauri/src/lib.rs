@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsStr;
 use std::fs::{create_dir_all, File, OpenOptions};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -303,19 +303,10 @@ fn stop_container(
 fn get_activity(app: AppHandle) -> Vec<ActivityRecord> {
     match read_activity(&app) {
         Ok(records) => records,
-        Err(err) => vec![ActivityRecord {
-            id: activity_id(now_ms(), "activity_read_failed"),
-            action: "activity_read_failed".to_string(),
-            command: "activity.jsonl".to_string(),
-            started_at_ms: now_ms(),
-            duration_ms: 0,
-            success: false,
-            exit_code: None,
-            stderr: mask_sensitive(&format!("failed to read activity log: {err}")),
-            requested_by: None,
-            approval_id: None,
-            approval_reason: None,
-        }],
+        Err(err) => vec![failed_activity_record(
+            "activity_read_failed",
+            format!("failed to read activity log: {err}"),
+        )],
     }
 }
 
@@ -944,11 +935,6 @@ fn activity_id(started_at_ms: u128, action: &str) -> String {
     format!("{started_at_ms}-{action}")
 }
 
-fn activity_path(app: &AppHandle) -> Option<PathBuf> {
-    let dir = app.path().app_data_dir().ok()?;
-    Some(dir.join("activity.jsonl"))
-}
-
 fn required_activity_path(app: &AppHandle) -> Result<PathBuf, std::io::Error> {
     let dir = app.path().app_data_dir().map_err(std::io::Error::other)?;
     Ok(dir.join("activity.jsonl"))
@@ -988,10 +974,12 @@ fn append_activity(app: &AppHandle, record: ActivityRecord) -> Result<(), std::i
 }
 
 fn read_activity(app: &AppHandle) -> Result<Vec<ActivityRecord>, std::io::Error> {
-    let Some(path) = activity_path(app) else {
-        return Ok(Vec::new());
+    let path = required_activity_path(app)?;
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
     };
-    let file = File::open(path)?;
     let reader = BufReader::new(file);
     let mut records = VecDeque::with_capacity(ACTIVITY_LIMIT);
 
@@ -1001,44 +989,23 @@ fn read_activity(app: &AppHandle) -> Result<Vec<ActivityRecord>, std::io::Error>
             Err(err) => {
                 push_bounded_activity(
                     &mut records,
-                    ActivityRecord {
-                        id: activity_id(now_ms(), "activity_read_line_failed"),
-                        action: "activity_read_line_failed".to_string(),
-                        command: "activity.jsonl".to_string(),
-                        started_at_ms: now_ms(),
-                        duration_ms: 0,
-                        success: false,
-                        exit_code: None,
-                        stderr: mask_sensitive(&format!(
-                            "failed to read activity log line {}: {err}",
-                            line_index + 1
-                        )),
-                        requested_by: None,
-                        approval_id: None,
-                        approval_reason: None,
-                    },
+                    failed_activity_record(
+                        "activity_read_line_failed",
+                        format!("failed to read activity log line {}: {err}", line_index + 1),
+                    ),
                 );
                 continue;
             }
         };
         let record = match serde_json::from_str::<ActivityRecord>(&line) {
             Ok(record) => sanitize_activity_record(record),
-            Err(err) => ActivityRecord {
-                id: activity_id(now_ms(), "activity_corrupt_line"),
-                action: "activity_corrupt_line".to_string(),
-                command: "activity.jsonl".to_string(),
-                started_at_ms: now_ms(),
-                duration_ms: 0,
-                success: false,
-                exit_code: None,
-                stderr: mask_sensitive(&format!(
+            Err(err) => failed_activity_record(
+                "activity_corrupt_line",
+                format!(
                     "failed to parse activity log line {}: {err}",
                     line_index + 1
-                )),
-                requested_by: None,
-                approval_id: None,
-                approval_reason: None,
-            },
+                ),
+            ),
         };
         push_bounded_activity(&mut records, record);
     }
@@ -1066,10 +1033,24 @@ fn push_bounded_activity(records: &mut VecDeque<ActivityRecord>, record: Activit
     records.push_back(record);
 }
 
+fn failed_activity_record(action: &str, message: String) -> ActivityRecord {
+    ActivityRecord {
+        id: activity_id(now_ms(), action),
+        action: action.to_string(),
+        command: "activity.jsonl".to_string(),
+        started_at_ms: now_ms(),
+        duration_ms: 0,
+        success: false,
+        exit_code: None,
+        stderr: mask_sensitive(&message),
+        requested_by: None,
+        approval_id: None,
+        approval_reason: None,
+    }
+}
+
 fn compact_activity(app: &AppHandle) -> Result<(), std::io::Error> {
-    let Some(path) = activity_path(app) else {
-        return Ok(());
-    };
+    let path = required_activity_path(app)?;
     let mut records = read_activity(app)?;
     records.reverse();
     let mut file = File::create(path)?;
@@ -1115,8 +1096,9 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        audit_approval_id, expected_stop_phrase, json_has_managed_container_marker, mask_sensitive,
-        redact_json_value, trim_bytes, validate_container_id, validate_stop_reason,
+        audit_approval_id, expected_stop_phrase, failed_activity_record,
+        json_has_managed_container_marker, mask_sensitive, redact_json_value, trim_bytes,
+        validate_container_id, validate_stop_reason,
     };
     use serde_json::json;
 
@@ -1210,5 +1192,17 @@ mod tests {
         let fingerprint = audit_approval_id("12345678-1234-1234-1234-123456789abc");
         assert!(fingerprint.starts_with("approval:"));
         assert!(!fingerprint.contains("12345678-1234"));
+    }
+
+    #[test]
+    fn activity_read_failures_surface_as_failed_records() {
+        let record = failed_activity_record(
+            "activity_read_failed",
+            "failed to read activity log: unavailable".to_string(),
+        );
+        assert_eq!(record.action, "activity_read_failed");
+        assert_eq!(record.command, "activity.jsonl");
+        assert!(!record.success);
+        assert!(record.stderr.contains("unavailable"));
     }
 }
