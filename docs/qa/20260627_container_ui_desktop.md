@@ -7,8 +7,8 @@
 ## 対象環境
 
 - macOS 26.3
-- Node.js v22.23.0
-- npm 10.9.8
+- Node.js v24.18.0
+- npm 11.16.0
 - rustc 1.92.0
 - cargo 1.92.0
 - `container CLI version 1.0.0 (build: release, commit: ee848e3)`
@@ -31,6 +31,8 @@
 
 ```bash
 git fetch --all --prune
+node -v
+npm -v
 npm install
 npm audit --audit-level=moderate
 npm audit signatures --json
@@ -41,6 +43,10 @@ cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo test --manifest-path src-tauri/Cargo.toml
 npm run build
 npm run tauri:build
+mise run local-release-dmg
+mise run local-verify-release
+xcrun stapler validate "src-tauri/target/release/bundle/dmg/Container UI_0.1.0_aarch64.dmg"
+spctl --assess --type open --context context:primary-signature --verbose=4 "src-tauri/target/release/bundle/dmg/Container UI_0.1.0_aarch64.dmg"
 mise run local-check
 npm run tauri -- icon src/assets/container-ui-icon.png
 npm run dev -- --host 127.0.0.1
@@ -77,6 +83,11 @@ container delete container-ui-smoke
 - `cargo test --manifest-path src-tauri/Cargo.toml`: 12 tests pass。
 - `npm run build`: pass。
 - `npm run tauri:build`: pass。
+- `mise run local-release-dmg`: pass。Developer ID 署名・Notarization 済み DMG を生成した。
+- `mise run local-verify-release`: pass。DMG と DMG 内の `Container UI.app` が `source=Notarized Developer ID` として accepted であることを確認した。
+- `xcrun stapler validate src-tauri/target/release/bundle/dmg/Container UI_0.1.0_aarch64.dmg`: pass。
+- `spctl --assess --type open --context context:primary-signature --verbose=4 src-tauri/target/release/bundle/dmg/Container UI_0.1.0_aarch64.dmg`: pass。`source=Notarized Developer ID`。
+- DMG を read-only mount し、同梱 `Container UI.app` に対して `codesign --verify --deep --strict --verbose=2` と `spctl --assess --type execute --verbose=4` を実行した結果、`valid on disk` / `satisfies its Designated Requirement` / `source=Notarized Developer ID` を確認した。
 - `mise run local-check`: mise の trust ガードで未実行。ユーザーの trust 設定は変更せず、同タスク内の実コマンドは個別に成功確認済み。
 - 生成物:
   - `src-tauri/target/release/bundle/macos/Container UI.app`
@@ -103,6 +114,7 @@ container delete container-ui-smoke
 - `container-ui-smoke` は停止後に CLI で削除し、`container list --all --format json` に残っていないことを確認した。
 - 2026-06-28 の再撮影時に `container system status --format json` が一時的に `unregistered` を返したため、`container system start` で復旧し、CLI が `running` を返すことを確認してから packaged `.app` を再撮影した。
 - 2026-06-28 の追加対応では、作業中のローカル container service を実際に停止する副作用を避けるため、`container system stop` 状態の UI は Browser preview mock で再現した。backend 側は `container system start` が固定引数 `["system", "start"]` だけを使うことを Rust test で確認した。
+- 2026-06-28 に Node.js v24.18.0 / npm 11.16.0 で依存関係を再解決し、frontend build と packaged `.app` / `.dmg` を再生成した。
 
 ## 発見した不具合と対応
 

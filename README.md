@@ -1,10 +1,11 @@
 # Container UI
 
-Lightweight macOS desktop console for the local [`apple/container`](https://github.com/apple/container) CLI.
+Lightweight macOS desktop console that makes local [`apple/container`](https://github.com/apple/container) containers easier to inspect and operate through a focused UI.
 
 ## Features
 
 - Shows `container system status`, CLI version, local containers, images, volumes, networks, and one-shot stats.
+- Presents local `apple/container` containers in a readable UI with state, workload, memory, details, and recent logs.
 - Offers an explicit `container system start` action when the local container service is stopped or unavailable.
 - Displays container details from `container inspect` and recent logs from `container logs`.
 - Starts containers from the container table.
@@ -24,7 +25,7 @@ Lightweight macOS desktop console for the local [`apple/container`](https://gith
   - `/usr/local/bin/container`
   - `/opt/homebrew/bin/container`
   - `/usr/bin/container`
-- Node.js 22+.
+- Node.js 24.18.0.
 - Rust/Cargo.
 
 ## Development
