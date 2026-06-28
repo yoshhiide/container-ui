@@ -1,0 +1,14 @@
+[tools]
+node = "24.18.0"
+
+[tasks."local-dev"]
+description = "Run the Vite browser preview for Container UI."
+run = "npm run dev -- --host 127.0.0.1"
+
+[tasks."local-check"]
+description = "Run audit, frontend checks, Rust tests, and frontend build."
+run = "npm audit --audit-level=moderate && npm audit signatures --json && npm run typecheck && npm run lint && npm test && cargo test --manifest-path src-tauri/Cargo.toml && npm run build"
+
+[tasks."local-package"]
+description = "Build the packaged macOS Tauri app."
+run = "npm run tauri:build"
