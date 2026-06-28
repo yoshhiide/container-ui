@@ -13,9 +13,11 @@ import {
   Network,
   Pause,
   Play,
+  Power,
   RefreshCw,
   Server,
   SquareTerminal,
+  X,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -27,6 +29,7 @@ import {
   isTauriRuntime,
   requestStopApproval,
   startContainer,
+  startContainerSystem,
   stopContainer,
 } from "./lib/api";
 import appIcon from "./assets/container-ui-icon.png";
@@ -80,6 +83,8 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [operatingId, setOperatingId] = useState<string | null>(null);
+  const [systemStarting, setSystemStarting] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
   const [pendingStop, setPendingStop] = useState<ContainerRecord | null>(null);
   const [stopChallenge, setStopChallenge] = useState<StopApprovalChallenge | null>(null);
   const [stopAcknowledgement, setStopAcknowledgement] = useState("");
@@ -166,7 +171,9 @@ function App() {
   }, [selectedContainer, selectedId]);
 
   const runningCount = containers.filter(isRunning).length;
-  const systemStatus = snapshot?.systemStatus.data?.status ?? "unknown";
+  const systemStatus = snapshot?.systemStatus.data?.status ?? (snapshot?.systemStatus.error ? "unavailable" : "unknown");
+  const systemServiceError = useMemo(() => findSystemServiceError(snapshot), [snapshot]);
+  const systemNeedsStart = Boolean(snapshot && systemStatus !== "running");
   const pendingStopId = pendingStop ? containerId(pendingStop) : "";
   const requiredStopPhrase = stopChallenge?.requiredPhrase ?? (pendingStopId ? `STOP ${pendingStopId}` : "");
   const stopReady = Boolean(
@@ -235,6 +242,21 @@ function App() {
     void runContainerAction(container, action);
   }
 
+  async function runSystemStart() {
+    setSystemStarting(true);
+    setError(null);
+    try {
+      await startContainerSystem();
+      await loadSnapshot();
+      await loadActivity();
+    } catch (err) {
+      const failure = err as Partial<CommandFailure>;
+      setError(redactSensitive(failure.stderr || failure.message || String(err)));
+    } finally {
+      setSystemStarting(false);
+    }
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -296,13 +318,26 @@ function App() {
 
         {snapshot && (
           <PanelErrors
-            errors={[
-              snapshot.cliVersion.error,
-              snapshot.systemStatus.error,
-              snapshot.containers.error,
-              snapshot.images.error,
-              snapshot.stats.error,
-            ]}
+            errors={
+              systemNeedsStart
+                ? [snapshot.cliVersion.error]
+                : [
+                    snapshot.cliVersion.error,
+                    snapshot.systemStatus.error,
+                    snapshot.containers.error,
+                    snapshot.images.error,
+                    snapshot.stats.error,
+                  ]
+            }
+          />
+        )}
+
+        {systemNeedsStart && (
+          <SystemStartPanel
+            status={systemStatus}
+            error={systemServiceError}
+            loading={systemStarting}
+            onStart={() => void runSystemStart()}
           />
         )}
 
@@ -328,9 +363,14 @@ function App() {
                 containers={containers}
                 statsById={statsById}
                 selectedId={selectedContainer ? containerId(selectedContainer) : null}
-                onSelect={setSelectedId}
+                onSelect={(id) => {
+                  setSelectedId(id);
+                  setDetailOpen(true);
+                }}
                 onAction={requestContainerAction}
                 operatingId={operatingId}
+                detailOpen={detailOpen}
+                onCloseDetail={() => setDetailOpen(false)}
                 detail={
                   selectedContainer ? (
                     <ContainerDetail
@@ -350,6 +390,7 @@ function App() {
                         void loadDetail(containerId(selectedContainer), bootLogs, next);
                       }}
                       onReload={() => void loadDetail(containerId(selectedContainer))}
+                      onClose={() => setDetailOpen(false)}
                     />
                   ) : (
                     <div className="empty-state">No containers found</div>
@@ -428,6 +469,55 @@ function App() {
   );
 }
 
+function findSystemServiceError(snapshot: Snapshot | null): CommandFailure | null {
+  if (!snapshot) return null;
+  const errors = [
+    snapshot.systemStatus.error,
+    snapshot.containers.error,
+    snapshot.images.error,
+    snapshot.stats.error,
+  ].filter((item): item is CommandFailure => Boolean(item));
+  return (
+    errors.find((failure) => {
+      const text = `${failure.kind} ${failure.message} ${failure.stderr}`.toLowerCase();
+      return (
+        text.includes("container system start") ||
+        text.includes("xpc connection") ||
+        text.includes("unregistered") ||
+        text.includes("system_unavailable")
+      );
+    }) ??
+    errors[0] ??
+    null
+  );
+}
+
+function SystemStartPanel({
+  status,
+  error,
+  loading,
+  onStart,
+}: {
+  status: string;
+  error: CommandFailure | null;
+  loading: boolean;
+  onStart: () => void;
+}) {
+  return (
+    <section className="system-start-panel">
+      <div>
+        <p className="eyebrow">container system</p>
+        <h2>System is {status}</h2>
+        <p>{error ? summarizeError(error) : "Start the local container service before managing containers."}</p>
+      </div>
+      <button className="primary-button" type="button" onClick={onStart} disabled={loading}>
+        {loading ? <Loader2 className="spin" size={16} /> : <Power size={16} />}
+        Start container system
+      </button>
+    </section>
+  );
+}
+
 function Dashboard({
   snapshot,
   containers,
@@ -488,6 +578,8 @@ function ContainersView({
   onSelect,
   onAction,
   operatingId,
+  detailOpen,
+  onCloseDetail,
   detail,
 }: {
   containers: ContainerRecord[];
@@ -496,10 +588,12 @@ function ContainersView({
   onSelect: (id: string) => void;
   onAction: (container: ContainerRecord, action: "start" | "stop") => void;
   operatingId: string | null;
+  detailOpen: boolean;
+  onCloseDetail: () => void;
   detail: ReactNode;
 }) {
   return (
-    <div className="split-layout">
+    <div className="containers-layout">
       <section className="panel table-panel">
         <div className="panel-header">
           <div>
@@ -581,7 +675,17 @@ function ContainersView({
           </table>
         </div>
       </section>
-      {detail}
+      {detailOpen && (
+        <div className="detail-overlay" role="presentation" onClick={onCloseDetail}>
+          <aside
+            className="detail-drawer"
+            aria-label="Container detail"
+            onClick={(event) => event.stopPropagation()}
+          >
+            {detail}
+          </aside>
+        </div>
+      )}
     </div>
   );
 }
@@ -597,6 +701,7 @@ function ContainerDetail({
   onBootLogsChange,
   onLogLinesChange,
   onReload,
+  onClose,
 }: {
   container: ContainerRecord;
   stats: StatsRecord | undefined;
@@ -608,6 +713,7 @@ function ContainerDetail({
   onBootLogsChange: (next: boolean) => void;
   onLogLinesChange: (next: number) => void;
   onReload: () => void;
+  onClose: () => void;
 }) {
   const id = containerId(container);
   const inspectText = useMemo(
@@ -623,6 +729,9 @@ function ContainerDetail({
         </div>
         <button className="icon-button" type="button" onClick={onReload} title="Reload detail" aria-label="Reload detail">
           {loading ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+        </button>
+        <button className="icon-button" type="button" onClick={onClose} title="Close detail" aria-label="Close detail">
+          <X size={18} />
         </button>
       </div>
 

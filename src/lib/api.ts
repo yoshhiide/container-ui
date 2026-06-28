@@ -41,7 +41,7 @@ export function isTauriRuntime(): boolean {
 }
 
 export async function getSnapshot(): Promise<Snapshot> {
-  if (!isTauriRuntime()) return delayed(mockSnapshot);
+  if (!isTauriRuntime()) return delayed(mockSnapshotForPreview());
   return invoke<Snapshot>("get_snapshot");
 }
 
@@ -75,6 +75,25 @@ export async function startContainer(containerId: string): Promise<OperationResu
     return delayed({ stdout: "", stderr: "", command: "mock start", durationMs: 10 });
   }
   return invoke<OperationResult>("start_container", { containerId });
+}
+
+export async function startContainerSystem(): Promise<OperationResult> {
+  if (!isTauriRuntime()) {
+    mockSystemStatus = "running";
+    mockActivity.unshift({
+      id: `${Date.now()}-container_system_start`,
+      action: "container_system_start",
+      command: "/usr/local/bin/container system start",
+      startedAtMs: Date.now(),
+      durationMs: 120,
+      success: true,
+      exitCode: 0,
+      stderr: "",
+      requestedBy: "local-user",
+    });
+    return delayed({ stdout: "container system started", stderr: "", command: "mock system start", durationMs: 120 });
+  }
+  return invoke<OperationResult>("start_container_system");
 }
 
 export async function requestStopApproval(containerId: string): Promise<StopApprovalChallenge> {
@@ -130,6 +149,54 @@ function mockOperation(
     approvalId: approval?.approvalId,
     approvalReason: approval ? redactSensitive(approval.reason) : undefined,
   };
+}
+
+let mockSystemStatus: string | null = null;
+
+function mockSnapshotForPreview(): Snapshot {
+  const snapshot = structuredClone(mockSnapshot);
+  const urlStatus =
+    typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("system");
+  const status = mockSystemStatus ?? urlStatus ?? snapshot.systemStatus.data?.status ?? "running";
+  if (snapshot.systemStatus.data) {
+    snapshot.systemStatus.data.status = status;
+  }
+  if (status !== "running") {
+    snapshot.containers = {
+      ok: false,
+      data: null,
+      error: {
+        kind: "system_unavailable",
+        message: "container system is not running",
+        command: "container list --all --format json",
+        exitCode: 1,
+        stderr: "Ensure container system service has been started with `container system start`.",
+      },
+    };
+    snapshot.images = {
+      ok: false,
+      data: null,
+      error: {
+        kind: "system_unavailable",
+        message: "container system is not running",
+        command: "container image list --format json --verbose",
+        exitCode: 1,
+        stderr: "Ensure container system service has been started with `container system start`.",
+      },
+    };
+    snapshot.stats = {
+      ok: false,
+      data: null,
+      error: {
+        kind: "system_unavailable",
+        message: "container system is not running",
+        command: "container stats --format json --no-stream",
+        exitCode: 1,
+        stderr: "Ensure container system service has been started with `container system start`.",
+      },
+    };
+  }
+  return snapshot;
 }
 
 const mockSnapshot: Snapshot = {

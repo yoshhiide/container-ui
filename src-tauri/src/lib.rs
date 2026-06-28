@@ -130,6 +130,7 @@ struct CommandOutput {
     exit_code: Option<i32>,
     duration_ms: u128,
     command: String,
+    success: bool,
 }
 
 #[tauri::command]
@@ -137,7 +138,7 @@ fn get_snapshot(app: AppHandle) -> Snapshot {
     Snapshot {
         generated_at_ms: now_ms(),
         cli_version: capture_json_or_text(&app, "cli_version", &["--version"]),
-        system_status: capture_json(
+        system_status: capture_system_status(
             &app,
             "system_status",
             &["system", "status", "--format", "json"],
@@ -211,6 +212,17 @@ fn start_container(
 ) -> Result<OperationResult, CommandFailure> {
     let id = validate_container_id(&container_id)?;
     run_operation(&app, "container_start", &["start", &id])
+}
+
+#[tauri::command]
+fn start_container_system(app: AppHandle) -> Result<OperationResult, CommandFailure> {
+    let requested_by = audit_actor(&app);
+    run_operation_with_required_audit(
+        &app,
+        "container_system_start",
+        &system_start_args(),
+        requested_by,
+    )
 }
 
 #[tauri::command]
@@ -333,8 +345,46 @@ fn run_operation_with_audit(
     })
 }
 
+fn run_operation_with_required_audit(
+    app: &AppHandle,
+    action: &str,
+    args: &[&str],
+    requested_by: String,
+) -> Result<OperationResult, CommandFailure> {
+    let output = run_container_with_required_audit(
+        app,
+        action,
+        args,
+        DEFAULT_TIMEOUT_MS,
+        Some(requested_by),
+    )?;
+    Ok(OperationResult {
+        stdout: output.stdout,
+        stderr: output.stderr,
+        command: output.command,
+        duration_ms: output.duration_ms,
+    })
+}
+
 fn capture_json(app: &AppHandle, action: &str, args: &[&str]) -> PanelResult {
     match run_container(app, action, args, DEFAULT_TIMEOUT_MS)
+        .and_then(|output| parse_json_output(&output))
+    {
+        Ok(data) => PanelResult {
+            ok: true,
+            data: Some(data),
+            error: None,
+        },
+        Err(error) => PanelResult {
+            ok: false,
+            data: None,
+            error: Some(error),
+        },
+    }
+}
+
+fn capture_system_status(app: &AppHandle, action: &str, args: &[&str]) -> PanelResult {
+    match run_container_capture(app, action, args, DEFAULT_TIMEOUT_MS, None, false, None)
         .and_then(|output| parse_json_output(&output))
     {
         Ok(data) => PanelResult {
@@ -393,6 +443,52 @@ fn run_container_with_audit(
     args: &[&str],
     timeout_ms: u128,
     approval: Option<&ApprovalAudit>,
+) -> Result<CommandOutput, CommandFailure> {
+    let output = run_container_capture(
+        app,
+        action,
+        args,
+        timeout_ms,
+        approval,
+        approval.is_some(),
+        approval.map(|item| item.requested_by.clone()),
+    )?;
+    command_success_or_failure(output)
+}
+
+fn run_container_with_required_audit(
+    app: &AppHandle,
+    action: &str,
+    args: &[&str],
+    timeout_ms: u128,
+    requested_by: Option<String>,
+) -> Result<CommandOutput, CommandFailure> {
+    let output = run_container_capture(app, action, args, timeout_ms, None, true, requested_by)?;
+    command_success_or_failure(output)
+}
+
+fn command_success_or_failure(output: CommandOutput) -> Result<CommandOutput, CommandFailure> {
+    if output.success {
+        Ok(output)
+    } else {
+        Err(CommandFailure {
+            kind: "command_failed".to_string(),
+            message: "container CLI returned a non-zero exit code".to_string(),
+            command: output.command,
+            exit_code: output.exit_code,
+            stderr: mask_sensitive(&output.stderr),
+        })
+    }
+}
+
+fn run_container_capture(
+    app: &AppHandle,
+    action: &str,
+    args: &[&str],
+    timeout_ms: u128,
+    approval: Option<&ApprovalAudit>,
+    required_activity: bool,
+    requested_by: Option<String>,
 ) -> Result<CommandOutput, CommandFailure> {
     let container_bin = resolve_container_bin()?;
     let display_command = command_label(&container_bin, args);
@@ -490,11 +586,11 @@ fn run_container_with_audit(
             success,
             exit_code,
             stderr: mask_sensitive(&stderr),
-            requested_by: approval.map(|item| item.requested_by.clone()),
+            requested_by,
             approval_id: approval.map(|item| item.audit_approval_id.clone()),
             approval_reason: approval.map(|item| item.reason.clone()),
         },
-        approval.is_some(),
+        required_activity,
     )?;
 
     if timed_out {
@@ -507,23 +603,14 @@ fn run_container_with_audit(
         });
     }
 
-    if success {
-        Ok(CommandOutput {
-            stdout,
-            stderr,
-            exit_code,
-            duration_ms,
-            command: display_command,
-        })
-    } else {
-        Err(CommandFailure {
-            kind: "command_failed".to_string(),
-            message: "container CLI returned a non-zero exit code".to_string(),
-            command: display_command,
-            exit_code,
-            stderr: mask_sensitive(&stderr),
-        })
-    }
+    Ok(CommandOutput {
+        stdout,
+        stderr,
+        exit_code,
+        duration_ms,
+        command: display_command,
+        success,
+    })
 }
 
 fn resolve_container_bin() -> Result<PathBuf, CommandFailure> {
@@ -565,6 +652,10 @@ fn allowed_container_bin(path: &PathBuf) -> bool {
 
 fn expected_stop_phrase(container_id: &str) -> String {
     format!("STOP {container_id}")
+}
+
+fn system_start_args() -> [&'static str; 2] {
+    ["system", "start"]
 }
 
 fn validate_stop_reason(reason: &str) -> Result<String, CommandFailure> {
@@ -1085,6 +1176,7 @@ pub fn run() {
             inspect_container,
             get_container_logs,
             request_stop_approval,
+            start_container_system,
             start_container,
             stop_container,
             get_activity
@@ -1097,8 +1189,8 @@ pub fn run() {
 mod tests {
     use super::{
         audit_approval_id, expected_stop_phrase, failed_activity_record,
-        json_has_managed_container_marker, mask_sensitive, redact_json_value, trim_bytes,
-        validate_container_id, validate_stop_reason,
+        json_has_managed_container_marker, mask_sensitive, redact_json_value, system_start_args,
+        trim_bytes, validate_container_id, validate_stop_reason,
     };
     use serde_json::json;
 
@@ -1131,6 +1223,11 @@ mod tests {
             expected_stop_phrase("container-ui-smoke"),
             "STOP container-ui-smoke"
         );
+    }
+
+    #[test]
+    fn system_start_uses_fixed_allow_list_args() {
+        assert_eq!(system_start_args(), ["system", "start"]);
     }
 
     #[test]

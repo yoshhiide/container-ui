@@ -43,6 +43,7 @@ npm run build
 npm run tauri:build
 mise run local-check
 npm run tauri -- icon src/assets/container-ui-icon.png
+npm run dev -- --host 127.0.0.1
 open -n "src-tauri/target/release/bundle/macos/Container UI.app"
 container system status --format json
 container system start
@@ -65,13 +66,15 @@ container delete container-ui-smoke
 - 2026-06-28 にオリジナルのアプリアイコンを生成し、`src/assets/container-ui-icon.png` と `src-tauri/icons/*` に反映した。
 - 2026-06-28 に Browser preview で Dashboard / Containers / Images / Activity / Stop dialog を 1280x780 と 980x640 で検査し、control overlap / horizontal overflow / unexpected text overflow が 0 件であることを確認した。
 - 2026-06-28 に packaged `.app` を再ビルドし、実アプリのウィンドウキャプチャを `docs/assets/container-ui-containers.png` として保存した。
+- 2026-06-28 に Browser preview で Containers 画面を 1280x780 / 1120x720 / 720x720 で再検査し、normal table / detail drawer / stopped preview すべてで control overlap / horizontal overflow / unexpected text overflow / Memory-Action overlap が 0 件であることを確認した。
+- 2026-06-28 に `?system=stopped` の Browser preview で `Start container system` 導線を確認し、クリック後に mock status が `running` へ戻ることを確認した。
 - `npm audit --audit-level=moderate`: 0 vulnerabilities。
 - `npm audit signatures --json`: `invalid: []`, `missing: []`。
 - `npm run typecheck`: pass。
 - `npm run lint`: pass。
 - `npm test`: 1 file / 7 tests pass。
 - `cargo fmt --manifest-path src-tauri/Cargo.toml --check`: pass。
-- `cargo test --manifest-path src-tauri/Cargo.toml`: 11 tests pass。
+- `cargo test --manifest-path src-tauri/Cargo.toml`: 12 tests pass。
 - `npm run build`: pass。
 - `npm run tauri:build`: pass。
 - `mise run local-check`: mise の trust ガードで未実行。ユーザーの trust 設定は変更せず、同タスク内の実コマンドは個別に成功確認済み。
@@ -99,6 +102,7 @@ container delete container-ui-smoke
 - activity log は最新 150 件に圧縮されるため、後続の自動更新で古い検証レコードはローテーションされる。
 - `container-ui-smoke` は停止後に CLI で削除し、`container list --all --format json` に残っていないことを確認した。
 - 2026-06-28 の再撮影時に `container system status --format json` が一時的に `unregistered` を返したため、`container system start` で復旧し、CLI が `running` を返すことを確認してから packaged `.app` を再撮影した。
+- 2026-06-28 の追加対応では、作業中のローカル container service を実際に停止する副作用を避けるため、`container system stop` 状態の UI は Browser preview mock で再現した。backend 側は `container system start` が固定引数 `["system", "start"]` だけを使うことを Rust test で確認した。
 
 ## 発見した不具合と対応
 
@@ -114,6 +118,12 @@ container delete container-ui-smoke
   - 対応: Containers table を `Name / State / Workload / Memory / Action` に再設計し、State 列を広げて `stopped` が収まることを確認した。
 - Activity log の app data path 解決失敗と compaction path 解決失敗が空ログ/成功扱いに見える余地があった。
   - 対応: `required_activity_path` を読み込み・圧縮にも使い、読み込み失敗は failed activity record、required audit write/compaction 失敗は操作失敗として表面化するようにした。
+- `container system stop` 相当の停止状態では、エラーが複数バナーとして並び `container system start` の導線がなかった。
+  - 対応: system status が `running` 以外の場合は専用の system panel を出し、固定 `container system start` を実行するボタンを追加した。実行は activity log 必須書き込みとして記録する。
+- Containers 画面で Memory 表示と Start ボタンが近く、状態によって重なる余地があった。
+  - 対応: Containers table の最小幅と列配分、`.mini-meter` の幅制約を調整し、1280px / 1120px / 720px で Memory-Action overlap 0 件を確認した。
+- Containers エリアと詳細エリアが横並びで互いに狭く見えた。
+  - 対応: 選択中 container の詳細を右側 drawer 表示に変更し、Containers table は主画面幅を使えるようにした。
 
 ## 関連 Issue / PR
 

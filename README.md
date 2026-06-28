@@ -5,6 +5,7 @@ Lightweight macOS desktop console for the local [`apple/container`](https://gith
 ## Features
 
 - Shows `container system status`, CLI version, local containers, images, volumes, networks, and one-shot stats.
+- Offers an explicit `container system start` action when the local container service is stopped or unavailable.
 - Displays container details from `container inspect` and recent logs from `container logs`.
 - Starts containers from the container table.
 - Stops containers only after a backend-issued approval challenge is confirmed in the UI.
@@ -71,21 +72,23 @@ The desktop backend uses `std::process::Command` with fixed `container` argument
 Allowed operations:
 
 - Read-only: `--version`, `system status`, `list --all`, `image list`, `volume list`, `network list`, `stats --no-stream`, `inspect`, `logs`
-- Mutating: `start`, `stop` for non-managed containers
+- Mutating: fixed `system start`, `start`, `stop` for non-managed containers
 
-Forbidden operations include `run`, `create`, `delete`, `exec`, `shell`, `prune`, image pull/push/remove, volume create/remove, network create/remove, plugin operations, and arbitrary command strings.
+Forbidden operations include `system stop`, `run`, `create`, `delete`, `exec`, `shell`, `prune`, image pull/push/remove, volume create/remove, network create/remove, plugin operations, and arbitrary command strings.
 
 Guardrails:
 
 - Container IDs are validated before they are passed as CLI arguments.
 - The child process environment is cleared and rebuilt with a small allow-list.
 - CLI stdout/stderr is read through bounded streaming buffers before it is returned to the app.
+- System Start is exposed only as the fixed argument set `container system start`. The frontend cannot pass extra arguments or other `system` subcommands.
 - Start is allowed without an approval challenge because it is limited to an existing container ID and cannot create new workloads, change images, attach shells, or mutate storage topology. If future Start behavior gains those capabilities, it must move behind the same approval path as Stop.
 - Stop requests require a fresh in-memory approval challenge, the phrase `STOP <container-id>`, and a human-readable reason of 4 to 180 characters.
 - Stop approval challenges expire after 120 seconds and are consumed after one successful validation.
 - Containers identified as apple/container managed resources, such as `buildkit` or containers with apple/container managed labels, are visually marked and cannot be stopped from Container UI.
 - Visible logs, inspect text, command errors, and activity stderr mask lines that look like secrets.
 - Stop approval requests, pending Stop records, and Stop executions require activity log writes. The backend keeps the latest 150 activity records and surfaces corrupt or unreadable log lines as failed activity records.
+- System Start requires an activity log write and records the local actor as `requestedBy`.
 - Activity log path resolution and compaction failures are surfaced as failed activity records or required audit write failures instead of being silently treated as empty logs.
 
 Activity is stored at:
